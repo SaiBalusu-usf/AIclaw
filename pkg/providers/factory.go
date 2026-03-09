@@ -117,6 +117,33 @@ var standardProviderRegistry = map[string]providerDefaults{
 			return cfg.Providers.Moonshot.APIKey, cfg.Providers.Moonshot.APIBase, cfg.Providers.Moonshot.Proxy
 		},
 	},
+	"litellm": {
+		defaultBase: "http://localhost:4000/v1",
+		getConfig: func(cfg *config.Config) (string, string, string) {
+			return cfg.Providers.LiteLLM.APIKey, cfg.Providers.LiteLLM.APIBase, cfg.Providers.LiteLLM.Proxy
+		},
+		hasKey: func(cfg *config.Config) bool {
+			return cfg.Providers.LiteLLM.APIKey != "" || cfg.Providers.LiteLLM.APIBase != ""
+		},
+	},
+	"vivgrid": {
+		defaultBase: "https://api.vivgrid.com/v1",
+		getConfig: func(cfg *config.Config) (string, string, string) {
+			return cfg.Providers.Vivgrid.APIKey, cfg.Providers.Vivgrid.APIBase, cfg.Providers.Vivgrid.Proxy
+		},
+	},
+	"avian": {
+		defaultBase: "https://api.avian.io/v1",
+		getConfig: func(cfg *config.Config) (string, string, string) {
+			return cfg.Providers.Avian.APIKey, cfg.Providers.Avian.APIBase, cfg.Providers.Avian.Proxy
+		},
+	},
+	"minimax": {
+		defaultBase: "https://api.minimaxi.com/v1",
+		getConfig: func(cfg *config.Config) (string, string, string) {
+			return cfg.Providers.Minimax.APIKey, cfg.Providers.Minimax.APIBase, cfg.Providers.Minimax.Proxy
+		},
+	},
 }
 
 // providerNameAliases maps alternative provider names to their canonical names in the registry.
@@ -286,6 +313,33 @@ var modelInferenceRegistry = []modelInferenceEntry{
 			return applyStandardProvider(cfg, sel, standardProviderRegistry["mistral"])
 		},
 	},
+	// Vivgrid
+	{
+		matches: func(_, m string, cfg *config.Config) bool {
+			return strings.HasPrefix(m, "vivgrid/") && cfg.Providers.Vivgrid.APIKey != ""
+		},
+		apply: func(cfg *config.Config, sel *providerSelection) bool {
+			return applyStandardProvider(cfg, sel, standardProviderRegistry["vivgrid"])
+		},
+	},
+	// Minimax
+	{
+		matches: func(lm, m string, cfg *config.Config) bool {
+			return (strings.Contains(lm, "minimax") || strings.HasPrefix(m, "minimax/")) && cfg.Providers.Minimax.APIKey != ""
+		},
+		apply: func(cfg *config.Config, sel *providerSelection) bool {
+			return applyStandardProvider(cfg, sel, standardProviderRegistry["minimax"])
+		},
+	},
+	// Avian
+	{
+		matches: func(_, m string, cfg *config.Config) bool {
+			return strings.HasPrefix(m, "avian/") && cfg.Providers.Avian.APIKey != ""
+		},
+		apply: func(cfg *config.Config, sel *providerSelection) bool {
+			return applyStandardProvider(cfg, sel, standardProviderRegistry["avian"])
+		},
+	},
 	// VLLM (fallback if API base is configured)
 	{
 		matches: func(_, _ string, cfg *config.Config) bool {
@@ -298,7 +352,7 @@ var modelInferenceRegistry = []modelInferenceEntry{
 }
 
 func resolveProviderSelection(cfg *config.Config) (providerSelection, error) {
-	model := cfg.Agents.Defaults.Model
+	model := cfg.Agents.Defaults.GetModelName()
 	providerName := strings.ToLower(cfg.Agents.Defaults.Provider)
 	lowerModel := strings.ToLower(model)
 

@@ -32,6 +32,7 @@ func (te *ToolExecutor) ExecuteToolCalls(
 	agent *AgentInstance,
 	toolCalls []providers.ToolCall,
 	opts processOptions,
+	iteration int,
 ) []providers.Message {
 	var resultMessages []providers.Message
 
@@ -42,6 +43,7 @@ func (te *ToolExecutor) ExecuteToolCalls(
 			map[string]any{
 				"agent_id":  agent.ID,
 				"tool":      tc.Name,
+				"iteration": iteration,
 			})
 
 		// Create async callback for tools that implement AsyncTool
@@ -69,7 +71,7 @@ func (te *ToolExecutor) ExecuteToolCalls(
 
 		// Send ForUser content to user immediately if not Silent
 		if !toolResult.Silent && toolResult.ForUser != "" && opts.SendResponse {
-			te.bus.PublishOutbound(bus.OutboundMessage{
+			te.bus.PublishOutbound(ctx, bus.OutboundMessage{
 				Channel: opts.Channel,
 				ChatID:  opts.ChatID,
 				Content: toolResult.ForUser,

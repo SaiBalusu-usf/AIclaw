@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"unicode/utf8"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
@@ -19,13 +19,16 @@ import (
 type ContextCompressor struct {
 	bus         *bus.MessageBus
 	summarizing *sync.Map
+	wg          *sync.WaitGroup
 }
 
 // NewContextCompressor creates a new ContextCompressor.
-func NewContextCompressor(msgBus *bus.MessageBus, summarizing *sync.Map) *ContextCompressor {
+// The wg parameter tracks in-flight goroutines for graceful shutdown.
+func NewContextCompressor(msgBus *bus.MessageBus, summarizing *sync.Map, wg *sync.WaitGroup) *ContextCompressor {
 	return &ContextCompressor{
 		bus:         msgBus,
 		summarizing: summarizing,
+		wg:          wg,
 	}
 }
 
@@ -38,10 +41,14 @@ func (cc *ContextCompressor) MaybeSummarize(agent *AgentInstance, sessionKey, ch
 	if len(newHistory) > SummarizeMessageThreshold || tokenEstimate > threshold {
 		summarizeKey := agent.ID + ":" + sessionKey
 		if _, loading := cc.summarizing.LoadOrStore(summarizeKey, true); !loading {
+			cc.wg.Add(1)
 			go func() {
+				defer cc.wg.Done()
 				defer cc.summarizing.Delete(summarizeKey)
 				if !constants.IsInternalChannel(channel) {
-					cc.bus.PublishOutbound(bus.OutboundMessage{
+					pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer pubCancel()
+					cc.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
 						Channel: channel,
 						ChatID:  chatID,
 						Content: "Memory threshold reached. Optimizing conversation history...",
@@ -130,8 +137,10 @@ func (cc *ContextCompressor) SummarizeSession(agent *AgentInstance, sessionKey s
 		if m.Role != "user" && m.Role != "assistant" {
 			continue
 		}
-		// Use character-based estimation (2.5 chars per token = totalChars * 2 / 5)
-		msgTokens := utf8.RuneCountInString(m.Content) * 2 / 5
+		// Use byte-based estimation (~2 bytes per token), matching original behavior.
+		// For ASCII text this gives 0.5 chars/token; for CJK (3 bytes/rune) it
+		// over-estimates slightly, which is the safer direction for the guard.
+		msgTokens := len(m.Content) / 2
 		if msgTokens > maxMessageTokens {
 			omitted = true
 			continue
@@ -225,13 +234,11 @@ func (cc *ContextCompressor) SummarizeBatch(
 }
 
 // EstimateTokens estimates the number of tokens in a message list.
-// Uses a safe heuristic of 2.5 characters per token to account for CJK and other
-// overheads better than the previous 3 chars/token.
+// Uses byte length / 2 (~2 bytes per token) to match the original behavior.
 func (cc *ContextCompressor) EstimateTokens(messages []providers.Message) int {
-	totalChars := 0
+	totalBytes := 0
 	for _, m := range messages {
-		totalChars += utf8.RuneCountInString(m.Content)
+		totalBytes += len(m.Content)
 	}
-	// 2.5 chars per token = totalChars * 2 / 5
-	return totalChars * 2 / 5
+	return totalBytes / 2
 }

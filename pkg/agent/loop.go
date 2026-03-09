@@ -41,7 +41,6 @@ type AgentLoop struct {
 	registry       *AgentRegistry
 	state          *state.Manager
 	running        atomic.Bool
-	summarizing    sync.Map
 	fallback       *providers.FallbackChain
 	channelManager *channels.Manager
 	mediaStore     media.MediaStore
@@ -53,9 +52,10 @@ type AgentLoop struct {
 	toolExec   *ToolExecutor
 
 	// Graceful shutdown support
-	cancelCtx  context.Context
-	cancelFunc context.CancelFunc
-	wg         sync.WaitGroup
+	cancelCtx    context.Context
+	cancelFunc   context.CancelFunc
+	wg           sync.WaitGroup
+	summarizing  sync.Map // owned here, pointer shared with compressor
 }
 
 // processOptions configures how a message is processed
@@ -102,27 +102,24 @@ func NewAgentLoop(
 		stateManager = state.NewManager(defaultAgent.Workspace)
 	}
 
-	// Initialize extracted components
-	summarizing := &sync.Map{}
-	compressor := NewContextCompressor(msgBus, summarizing)
-	toolExec := NewToolExecutor(msgBus)
-
 	// Create cancellation context for graceful shutdown
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	al := &AgentLoop{
-		bus:         msgBus,
-		cfg:         cfg,
-		registry:    registry,
-		state:       stateManager,
-		summarizing: sync.Map{},
-		fallback:    fallbackChain,
+		bus:        msgBus,
+		cfg:        cfg,
+		registry:   registry,
+		state:      stateManager,
+		fallback:   fallbackChain,
 		cmdRegistry: commands.NewRegistry(commands.BuiltinDefinitions()),
-		compressor:  compressor,
-		toolExec:    toolExec,
-		cancelCtx:   cancelCtx,
-		cancelFunc:  cancelFunc,
+		toolExec:   NewToolExecutor(msgBus),
+		cancelCtx:  cancelCtx,
+		cancelFunc: cancelFunc,
 	}
+
+	// Wire compressor with references to al.wg (shutdown tracking) and
+	// al.summarizing (dedup map) — must happen after al is allocated.
+	al.compressor = NewContextCompressor(msgBus, &al.summarizing, &al.wg)
 
 	return al
 }

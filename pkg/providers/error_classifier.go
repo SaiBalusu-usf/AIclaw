@@ -100,7 +100,7 @@ var (
 		rxp(`total tokens.*exceed`),
 		substr("context_length_exceeded"),
 		substr("maximum context length"),
-		substr("invalidparameter"),
+		rxp(`invalidparameter.*token`),
 		rxp(`tokens?.*exceed`),
 		rxp(`exceeds? the (model|max).*token`),
 	}
@@ -238,8 +238,8 @@ func IsImageSizeError(msg string) bool {
 }
 
 // IsContextWindowError returns true if the error indicates a context window / token limit
-// exhaustion. This is more precise than naive string matching and avoids false positives
-// on errors like "invalid authentication token".
+// exhaustion. Uses targeted regex/substring patterns to reduce false positives
+// (e.g. "invalidparameter" is scoped to token-related errors only).
 func IsContextWindowError(err error) bool {
 	if err == nil {
 		return false

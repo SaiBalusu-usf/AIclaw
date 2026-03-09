@@ -183,20 +183,56 @@ type modelInferenceEntry struct {
 	apply func(cfg *config.Config, sel *providerSelection) bool
 }
 
-// modelInferenceRegistry defines fallback model → provider inference rules.
-// Order matters: first match wins.
-var modelInferenceRegistry = []modelInferenceEntry{
-	// Moonshot/Kimi
-	{
+// simpleInference creates a modelInferenceEntry for standard providers.
+// It matches model names by keyword (substring of lowercase model) or prefix (of original model),
+// checks that the provider has credentials, and delegates to standardProviderRegistry.
+// This eliminates boilerplate for providers that follow the standard pattern.
+func simpleInference(registryKey string, keywords []string, prefixes []string) modelInferenceEntry {
+	return modelInferenceEntry{
 		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "kimi") || strings.Contains(lm, "moonshot") || strings.HasPrefix(m, "moonshot/")) &&
-				cfg.Providers.Moonshot.APIKey != ""
+			nameMatch := false
+			for _, p := range prefixes {
+				if strings.HasPrefix(m, p) {
+					nameMatch = true
+					break
+				}
+			}
+			if !nameMatch {
+				for _, k := range keywords {
+					if strings.Contains(lm, k) {
+						nameMatch = true
+						break
+					}
+				}
+			}
+			if !nameMatch {
+				return false
+			}
+			entry, ok := standardProviderRegistry[registryKey]
+			if !ok {
+				return false
+			}
+			if entry.hasKey != nil {
+				return entry.hasKey(cfg)
+			}
+			key, _, _ := entry.getConfig(cfg)
+			return key != ""
 		},
 		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["moonshot"])
+			return applyStandardProvider(cfg, sel, standardProviderRegistry[registryKey])
 		},
-	},
-	// OpenRouter-prefixed models (openrouter/, anthropic/, openai/, meta-llama/, deepseek/, google/)
+	}
+}
+
+// modelInferenceRegistry defines fallback model → provider inference rules.
+// Order matters: first match wins.
+// Simple providers use simpleInference() to reduce boilerplate; complex providers
+// (with OAuth, special auth, or multi-prefix routing) use custom entries.
+var modelInferenceRegistry = []modelInferenceEntry{
+	// Moonshot/Kimi
+	simpleInference("moonshot", []string{"kimi", "moonshot"}, []string{"moonshot/"}),
+	// OpenRouter-prefixed models — no credential check in matches because OpenRouter
+	// acts as a router; credential check happens in applyStandardProvider.
 	{
 		matches: func(_, m string, _ *config.Config) bool {
 			for _, prefix := range []string{"openrouter/", "anthropic/", "openai/", "meta-llama/", "deepseek/", "google/"} {
@@ -210,7 +246,7 @@ var modelInferenceRegistry = []modelInferenceEntry{
 			return applyStandardProvider(cfg, sel, standardProviderRegistry["openrouter"])
 		},
 	},
-	// Claude models → Anthropic (with OAuth support)
+	// Claude models → Anthropic (custom: OAuth/token auth support)
 	{
 		matches: func(lm, m string, cfg *config.Config) bool {
 			return (strings.Contains(lm, "claude") || strings.HasPrefix(m, "anthropic/")) &&
@@ -234,7 +270,7 @@ var modelInferenceRegistry = []modelInferenceEntry{
 			return true
 		},
 	},
-	// GPT models → OpenAI (with OAuth/codex-cli support)
+	// GPT models → OpenAI (custom: OAuth/codex-cli/web-search support)
 	{
 		matches: func(lm, m string, cfg *config.Config) bool {
 			return (strings.Contains(lm, "gpt") || strings.HasPrefix(m, "openai/")) &&
@@ -259,88 +295,17 @@ var modelInferenceRegistry = []modelInferenceEntry{
 			return true
 		},
 	},
-	// Gemini
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "gemini") || strings.HasPrefix(m, "google/")) && cfg.Providers.Gemini.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["gemini"])
-		},
-	},
-	// Zhipu/GLM
-	{
-		matches: func(lm, _ string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "glm") || strings.Contains(lm, "zhipu") || strings.Contains(lm, "zai")) && cfg.Providers.Zhipu.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["zhipu"])
-		},
-	},
-	// Groq
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "groq") || strings.HasPrefix(m, "groq/")) && cfg.Providers.Groq.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["groq"])
-		},
-	},
-	// Nvidia
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "nvidia") || strings.HasPrefix(m, "nvidia/")) && cfg.Providers.Nvidia.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["nvidia"])
-		},
-	},
-	// Ollama
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "ollama") || strings.HasPrefix(m, "ollama/")) && cfg.Providers.Ollama.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["ollama"])
-		},
-	},
-	// Mistral
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "mistral") || strings.HasPrefix(m, "mistral/")) && cfg.Providers.Mistral.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["mistral"])
-		},
-	},
-	// Vivgrid
-	{
-		matches: func(_, m string, cfg *config.Config) bool {
-			return strings.HasPrefix(m, "vivgrid/") && cfg.Providers.Vivgrid.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["vivgrid"])
-		},
-	},
-	// Minimax
-	{
-		matches: func(lm, m string, cfg *config.Config) bool {
-			return (strings.Contains(lm, "minimax") || strings.HasPrefix(m, "minimax/")) && cfg.Providers.Minimax.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["minimax"])
-		},
-	},
-	// Avian
-	{
-		matches: func(_, m string, cfg *config.Config) bool {
-			return strings.HasPrefix(m, "avian/") && cfg.Providers.Avian.APIKey != ""
-		},
-		apply: func(cfg *config.Config, sel *providerSelection) bool {
-			return applyStandardProvider(cfg, sel, standardProviderRegistry["avian"])
-		},
-	},
-	// VLLM (fallback if API base is configured)
+	// Standard providers — simple keyword/prefix matching
+	simpleInference("gemini", []string{"gemini"}, []string{"google/"}),
+	simpleInference("zhipu", []string{"glm", "zhipu", "zai"}, nil),
+	simpleInference("groq", []string{"groq"}, []string{"groq/"}),
+	simpleInference("nvidia", []string{"nvidia"}, []string{"nvidia/"}),
+	simpleInference("ollama", []string{"ollama"}, []string{"ollama/"}),
+	simpleInference("mistral", []string{"mistral"}, []string{"mistral/"}),
+	simpleInference("vivgrid", nil, []string{"vivgrid/"}),
+	simpleInference("minimax", []string{"minimax"}, []string{"minimax/"}),
+	simpleInference("avian", nil, []string{"avian/"}),
+	// VLLM (custom: matches any model if API base is configured)
 	{
 		matches: func(_, _ string, cfg *config.Config) bool {
 			return cfg.Providers.VLLM.APIBase != ""
